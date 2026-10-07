@@ -3,12 +3,53 @@
 Qt Mini VMS 화면의 카메라 목록 / 영상 / PTZ 배치를 참고한 브라우저 클라이언트입니다.
 ONVIF, 녹화, 추적 및 이벤트 화면은 포함하지 않습니다.
 
+## 시스템 구조
+
+```mermaid
+flowchart LR
+    Static["Node 정적 파일 서버 :5173"] -->|"HTML / CSS / JS"| Web["PTZ Studio · Browser"]
+    Pi["Raspberry Pi Camera"] --> Media["별도 MediaMTX / WHEP<br/>실제 가용성 확인 필요"]
+    Media -->|"WebRTC 영상"| Web
+    Web <-->|"WebSocket :5000 / 상태 조회"| VMS["Mini VMS Server"]
+    Web -.->|"PTZ 계약 수정 후 연결"| VMS
+    VMS -->|"ONVIF Digest :8080"| Pi
+    VMS -.->|"향후 VMS WebRTC Gateway"| Web
+```
+
+Node 서버는 정적 파일을 제공합니다. 현재 영상은 Pi의 별도 WebRTC 서버에 연결하며 VMS WebRTC 중계는 미구현입니다. 점선은 미완료 연동을 뜻합니다.
+
+## 코드 구조
+
+```mermaid
+flowchart TD
+    UI["index.html · 카메라/영상/PTZ/설정"] --> App["app.js · 화면·연결 상태"]
+    CSS["style.css · 테마·반응형"] --> UI
+    App --> Demo["Canvas 데모"]
+    App --> Reader["vendor/reader.js · MediaMTX reader"]
+    Reader --> Video["video · frame 수신 확인"]
+    App --> WS["WebSocket · VMS 조회·상태 알림"]
+    App --> Storage["localStorage · 설정·테마"]
+```
+
+```text
+PTZ_WEB_Client/
+├── index.html             # 화면
+├── style.css              # 테마·반응형
+├── app.js                 # 데모·WebRTC·VMS·PTZ 입력
+├── server.mjs             # Node 정적 파일 서버
+├── package.json           # 실행·테스트 명령
+├── package-lock.json      # dependency 잠금
+├── vendor/                # WebRTC reader 및 라이선스
+├── tests/                 # Playwright UI / mock VMS
+└── playwright.config.js   # 테스트 설정
+```
+
 ## 실행
 
-Node.js 20 이상에서:
+`import.meta.dirname`을 지원하는 Node.js 20.11 이상에서:
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
@@ -33,20 +74,35 @@ MediaMTX 공식 WebRTC reader를 로컬에 포함해 SDP/ICE, 세션 해제 및 
 
 ## 실제 PTZ 연결 계약
 
-현재 VMS는 PTZ가 미지원이므로 실제 모드에서 PTZ 버튼이 비활성화됩니다. 기본 WebSocket 프로토콜은 기존 VMS를 따릅니다.
+현재 VMS에는 PTZ가 구현되어 있지만 Web의 이동 요청 필드가 아직 서버와 맞지 않습니다. `capabilities.ptz=true`를 받으면 버튼이 활성화될 수 있으나 현재 MOVE 형식은 INVALID_VELOCITY로 거절됩니다. 기본 조회 프로토콜은 VMS를 따릅니다.
 
 - `GET_CAMERA_LIST`, `GET_CAMERA_STATUS`, `CAMERA_STATUS` 알림
 - `version: 1`, 문자열 `requestId`, `command`, `cameraId`
 - 응답 `type: "response"`, `ok`, `data` 또는 `error`
 
-향후 서버에서 `capabilities.ptz=true`를 제공할 때 사용할 **클라이언트 제안 계약**:
+현재 Web 코드가 전송하는 이동 형식:
 
 ```json
 {"version":1,"requestId":"3","command":"PTZ_MOVE","cameraId":"CAM01","pan":0.5,"tilt":0}
 {"version":1,"requestId":"4","command":"PTZ_STOP","cameraId":"CAM01"}
 ```
 
-pan/tilt는 -1..1 속도 값이며 상단 이동은 양의 tilt입니다. 서버 구현 시 필드명, 방향 및 속도 의미를 확인해야 합니다. 실제 장비 PTZ 구동은 검증하지 않았습니다. 중앙 복귀는 현재 서버 명령 계약이 없어 실제 모드에서 비활성화합니다.
+VMS가 요구하는 필드는 `panVelocity/tiltVelocity`입니다. 값은 -1..1이며 위쪽은 양의 tilt입니다.
+
+```json
+{"version":1,"requestId":"3","command":"PTZ_MOVE","cameraId":"CAM01","panVelocity":0.3,"tiltVelocity":0}
+{"version":1,"requestId":"4","command":"PTZ_STOP","cameraId":"CAM01"}
+{"version":1,"requestId":"5","command":"PTZ_CENTER","cameraId":"CAM01"}
+```
+
+후속 Web 수정 사항:
+
+- 이동 필드를 변경하고 누르는 동안 약 200ms마다 MOVE 갱신. 현재는 누름 시작 시 한 번만 전송합니다.
+- VMS의 ACCEPTED 응답과 같은 requestId의 PTZ_RESULT 알림을 구분합니다.
+- PI_ACKNOWLEDGED는 ONVIF 응답이며 모터 도착 완료가 아닙니다. FAILED/SUPERSEDED도 처리해야 합니다.
+- 서버 capability에 따라 PTZ_CENTER 연결. 현재 실제 모드의 중앙 버튼은 비활성화됩니다.
+
+실제 장비의 Web PTZ 구동은 검증하지 않았습니다. VMS는 PT1S timeout, 600ms 갱신 lease 및 연결 단절 시 Stop 시도를 구현했습니다.
 
 버튼 release/cancel, 키 해제, 창 focus 이탈, 탭 숨김, 카메라/모드 전환 시 정지를 요청합니다. 소켓이 끊긴 경우 정지 명령 전달은 보장되지 않으므로 서버에도 연결 종료/명령 lease에 따른 자동 정지가 필요합니다. 응답 시간 초과 또는 이동 오류 시 제어를 비활성화합니다. 브라우저는 Qt legacy의 raw TCP `PTZ:LEFT` 프로토콜에 직접 연결하지 않습니다.
 
