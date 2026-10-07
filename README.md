@@ -1,4 +1,4 @@
-# PTZ Studio / Web client
+# PTZ Studio Web Client
 
 Qt Mini VMS 화면의 카메라 목록 / 영상 / PTZ 배치를 참고한 브라우저 클라이언트입니다.
 ONVIF, 녹화, 추적 및 이벤트 화면은 포함하지 않습니다.
@@ -68,7 +68,7 @@ Qt legacy 코드의 `http://192.168.0.92:8889/cam/` 재생 페이지를 바탕�
 
 MediaMTX 공식 WebRTC reader를 로컬에 포함해 SDP/ICE, 세션 해제 및 재접속을 처리합니다. `video` 요소의 프레임 증가를 확인한 뒤에만 LIVE로 표시합니다. 데모에는 실제 해상도·프레임 통계 값을 만들지 않습니다. 영상 정지, 모드 전환 및 페이지 종료 시 reader/트랙을 해제합니다.
 
-현재 C:\PTZ_VMS_Server는 RTSP 중계만 구현되어 있으며 **WHEP/WebRTC가 구현되어 있지 않습니다.** 따라서 기본 영상 주소는 VMS를 경유하지 않고 Pi의 별도 WebRTC 서버에 접속합니다. VMS 경유 구조로 바꾸려면 VMS 측 WebRTC gateway가 필요합니다. 브라우저가 접속 가능한 주소 및 영상 서버의 CORS 설정이 필요하고 HTTPS 웹페이지에서는 HTTPS/WSS 주소를 사용해야 합니다.
+현재 VMS는 RTSP 중계·녹화·ONVIF PTZ를 제공하지만 **WHEP/WebRTC gateway는 구현되어 있지 않습니다.** 따라서 기본 영상 주소는 VMS를 경유하지 않고 Pi의 별도 WebRTC 서버에 접속합니다. VMS 경유 구조로 바꾸려면 VMS 측 WebRTC gateway가 필요합니다. 브라우저가 접속 가능한 주소 및 영상 서버의 CORS 설정이 필요하고 HTTPS 웹페이지에서는 HTTPS/WSS 주소를 사용해야 합니다.
 
 공식 참고: https://mediamtx.org/docs/read/web-browsers
 
@@ -104,7 +104,7 @@ VMS가 요구하는 필드는 `panVelocity/tiltVelocity`입니다. 값은 -1..1�
 
 실제 장비의 Web PTZ 구동은 검증하지 않았습니다. VMS는 PT1S timeout, 600ms 갱신 lease 및 연결 단절 시 Stop 시도를 구현했습니다.
 
-버튼 release/cancel, 키 해제, 창 focus 이탈, 탭 숨김, 카메라/모드 전환 시 정지를 요청합니다. 소켓이 끊긴 경우 정지 명령 전달은 보장되지 않으므로 서버에도 연결 종료/명령 lease에 따른 자동 정지가 필요합니다. 응답 시간 초과 또는 이동 오류 시 제어를 비활성화합니다. 브라우저는 Qt legacy의 raw TCP `PTZ:LEFT` 프로토콜에 직접 연결하지 않습니다.
+버튼 release/cancel, 키 해제, 창 focus 이탈, 탭 숨김, 카메라/모드 전환 시 정지를 요청합니다. 소켓이 이미 끊긴 경우 정지 명령 전달은 보장되지 않습니다. 현재 VMS에는 세션 종료 및 이동 lease 만료 시 Stop 처리가 구현되어 있습니다. 웹의 응답 시간 초과 또는 이동 오류 시 제어를 비활성화합니다. 브라우저는 Qt legacy의 raw TCP `PTZ:LEFT` 프로토콜에 직접 연결하지 않습니다.
 
 영상 연결과 PTZ 연결은 독립적입니다. 각 카메라의 WHEP 주소는 설정에서 지정해야 합니다. 카메라 목록에서 다른 카메라를 선택하면 기존 영상을 정지하여 잘못된 카메라 영상이 남지 않게 합니다.
 
@@ -115,6 +115,18 @@ npx playwright install chromium
 npm test
 ```
 
-Playwright로 테마 저장, 데모 이동 및 정지, 미지원 PTZ 비활성화, 모의 서버 PTZ 명령 및 소켓 종료, 설정 저장과 모바일 overflow를 확인합니다. 모의 서버 검사는 실제 영상/장비 연결 검증과 별개입니다.
+Playwright로 테마 저장, 데모 이동 및 정지, 미지원 PTZ 비활성화, 모의 서버 PTZ 명령 및 소켓 종료, 설정 저장과 모바일 overflow를 확인합니다. 모의 PTZ 서버는 웹의 기존 `pan` / `tilt` 형식을 사용합니다. 따라서 최신 VMS 계약 및 실제 영상·장비 연결 검증과 별개입니다.
+
+`SESSION_SUMMARY.md`는 작성 시점의 기록입니다. 이후 추가된 서버 PTZ 등 현재 기능은 이 README와 소스를 기준으로 확인합니다.
+
+## 관련 프로젝트
+
+| 저장소 | 역할 |
+|---|---|
+| [PTZ_VMS_Server](https://github.com/PTZ-CAMERA/PTZ_VMS_Server) | 카메라 수신·RTSP TCP/UDP 중계·녹화·ONVIF PTZ |
+| [Qt_Client](https://github.com/PTZ-CAMERA/Qt_Client) | VMS를 사용하는 Qt 데스크톱 클라이언트 |
+| [PTZ_WEB_Client](https://github.com/PTZ-CAMERA/PTZ_WEB_Client) | WebRTC 영상·PTZ용 브라우저 화면 |
+
+## 외부 코드
 
 `vendor/reader.js`: bluenviron/mediamtx 공식 저장소에서 2026-10-07에 가져온 WebRTC reader. 라이선스는 `vendor/MEDIAMTX-LICENSE`에 보존했습니다. 외부 CDN 없이 포함합니다. 화면의 웹 폰트는 Google Fonts를 사용하며 네트워크가 없으면 시스템 폰트로 표시합니다.
