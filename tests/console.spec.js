@@ -19,9 +19,9 @@ test('theme selection persists and demo interaction stops on release and blur', 
 test('unsupported VMS keeps PTZ disabled and WebRTC failure never shows LIVE', async ({ page }) => {
   await page.routeWebSocket('ws://127.0.0.1:5000/ws', ws => {
     ws.onMessage(raw => { const req = JSON.parse(raw); const camera = { id: 'CAM01', name: 'Test camera', status: 'ONLINE', capabilities: { ptz: false } };
-      ws.send(JSON.stringify({ version: 1, type: 'response', requestId: req.requestId, ok: true, data: req.command === 'GET_CAMERA_LIST' ? { cameras: [camera] } : { camera } })); });
+      ws.send(JSON.stringify({ version: 1, type: 'response', requestId: req.requestId, ok: true, data: req.command === 'GET_WEB_STREAM' ? { cameraId: 'CAM01', ready: true, source: 'vms', protocol: 'webrtc', uri: 'http://127.0.0.1:8889/CAM01/whep' } : req.command === 'GET_CAMERA_LIST' ? { cameras: [camera] } : { camera } })); });
   });
-  await page.route('http://192.168.0.92:8889/**', route => route.abort()); await page.goto('/'); await page.locator('#demoToggle').uncheck();
+  await page.route('http://127.0.0.1:8889/**', route => route.abort()); await page.goto('/'); await page.locator('#demoToggle').uncheck();
   await expect(page.locator('#cameraName')).toHaveText('Test camera');
   await expect(page.getByRole('button', { name: '위로 이동' })).toBeDisabled(); await expect(page.locator('#center')).toBeDisabled();
   await expect(page.locator('#streamBadge')).not.toHaveText('LIVE'); await expect(page.locator('#ptzNotice')).toContainText('사용할 수 없습니다');
@@ -34,13 +34,13 @@ test('supported PTZ sends move/stop and clears controls after socket disconnect'
   }); });
   await page.route('http://192.168.0.92:8889/**', route => route.abort()); await page.goto('/'); await page.locator('#demoToggle').uncheck();
   await expect(page.getByRole('button', { name: '오른쪽으로 이동' })).toBeEnabled(); await page.locator('h1').click(); await page.keyboard.down('ArrowRight'); await page.keyboard.up('ArrowRight');
-  await expect.poll(() => commands.filter(c => c.command.startsWith('PTZ')).map(c => c.command)).toEqual(['PTZ_MOVE', 'PTZ_STOP']);
-  expect(commands.find(c => c.command === 'PTZ_MOVE')).toMatchObject({ cameraId: 'CAM01', pan: .5, tilt: 0 });
+  await expect.poll(() => commands.filter(c => c.command.startsWith('PTZ')).at(-1)?.command).toBe('PTZ_STOP');
+  expect(commands.find(c => c.command === 'PTZ_MOVE')).toMatchObject({ cameraId: 'CAM01', panVelocity: .3, tiltVelocity: 0 });
   connection.close(); await expect(page.getByRole('button', { name: '오른쪽으로 이동' })).toBeDisabled();
 });
 test('settings persist and mobile layout has no horizontal overflow', async ({ page }) => {
   await page.goto('/'); await page.getByRole('button', { name: '연결 설정 열기' }).click();
-  await page.locator('#cameraId').fill('CAM02'); await page.locator('#whepUrl').fill('http://localhost:8889/camera2/whep');
+  await page.locator('#cameraId').fill('CAM02');
   await page.getByRole('button', { name: '저장', exact: true }).click(); await expect(page.locator('#selectedId')).toHaveText('CAM02');
   await page.reload(); await expect(page.locator('#selectedId')).toHaveText('CAM02');
   await page.setViewportSize({ width: 390, height: 844 });

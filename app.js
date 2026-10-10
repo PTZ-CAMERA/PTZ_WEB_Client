@@ -4,8 +4,11 @@ const directions = [...document.querySelectorAll('.direction')];
 let demo = true, playing = true, reader = null, socket = null, generation = 0;
 let ptzReady = false, selectedId = 'CAM01', requestId = 0, move = null, lastVideoFrames = -1, lastFrameAt = 0;
 let position = { pan: 0, tilt: 0 }, pending = new Map(), cameras = [];
-let config = { cameraId: 'CAM01', whepUrl: 'http://192.168.0.92:8889/cam/whep', wsUrl: 'ws://127.0.0.1:5000/ws' };
-try { const saved = JSON.parse(localStorage.getItem('ptz.connection')); if (saved) config = { ...config, ...saved }; } catch {}
+let contextVersion = 0, ptzResults = new Map();
+const trackingOwners = new Set();
+let videoPending = false, videoRetry = null;
+let config = { cameraId: 'CAM01', wsUrl: 'ws://127.0.0.1:5000/ws' };
+try { const saved = JSON.parse(localStorage.getItem('ptz.connection')); if (saved) { for (const key of Object.keys(config)) if (typeof saved[key] === 'string') config[key] = saved[key]; } } catch {}
 for (const key of Object.keys(config)) $(key).value = config[key];
 let theme = 'light';
 try { theme = localStorage.getItem('ptz.theme') || 'light'; } catch {}
@@ -36,30 +39,39 @@ function renderCameras() {
     const small = document.createElement('small'); small.textContent = demo ? 'SIMULATED / PREVIEW' : camera.status || 'UNKNOWN';
     button.append(top, name, small); button.setAttribute('aria-pressed', String(camera.id === selectedId));
     button.onclick = () => {
-      if (selectedId !== camera.id) { stopMovement(); stopVideo(); selectedId = camera.id; log('CAMERA', `${selectedId} 선택. 설정의 WHEP 주소를 확인하세요.`); }
+      if (selectedId !== camera.id) { log('CAMERA', `${camera.id} 선택. 영상 시작 시 VMS 게이트웨이에 연결합니다.`); }
       selectCamera(camera); renderCameras();
+      if(!demo)send('GET_CAMERA_STATUS',{},data=>{if(data.camera?.id===selectedId)selectCamera(data.camera);});
     }; $('cameraList').append(button);
   });
 }
 function selectCamera(camera) {
+  if (selectedId !== camera.id) {
+    if (trackingOwners.has(selectedId) || [...pending.values(),...ptzResults.values()].some(r=>r.cameraId===selectedId && r.command==='TRACKING_ON')) send('TRACKING_OFF');
+    stopMovement(); stopVideo(); contextVersion++;
+  }
   selectedId = camera.id; $('cameraNumber').textContent = camera.id; $('cameraName').textContent = camera.name || 'PTZ Camera';
   $('stageCamera').textContent = selectedId; $('selectedId').textContent = selectedId;
-  ptzReady = !demo && camera.capabilities?.ptz === true && socket?.readyState === WebSocket.OPEN; updateControls();
+  if (!demo && camera.status !== 'ONLINE') { stopMovement(); window.VmsWorkspace?.clearOverlay(); }
+  ptzReady = !demo && camera.status === 'ONLINE' && camera.capabilities?.ptz === true && socket?.readyState === WebSocket.OPEN; updateControls();
+  window.VmsWorkspace?.contextChanged();
 }
 function updateControls() {
   const enabled = demo || ptzReady;
   directions.forEach(button => button.disabled = !enabled); $('speed').disabled = !enabled; $('stop').disabled = !enabled;
-  $('center').disabled = !demo; // Current VMS has no defined center command.
+  $('center').disabled = !demo && !(ptzReady && cameras.find(c => c.id === selectedId)?.capabilities?.ptzCenter === true);
   $('ptzBadge').textContent = demo ? 'DEMO' : ptzReady ? 'READY' : 'OFFLINE';
   $('controlStatus').textContent = demo ? '데모' : ptzReady ? '연결됨' : '사용 불가';
-  $('ptzNotice').textContent = demo ? '데모 카메라를 조작하고 있습니다.' : ptzReady ? 'PTZ 제어가 연결되었습니다. 중앙 복귀는 아직 지원하지 않습니다.' : '현재 서버에서 PTZ를 사용할 수 없습니다.';
+  $('ptzNotice').textContent = demo ? '데모 카메라를 조작하고 있습니다.' : ptzReady ? '누르는 동안 이동하며 놓으면 정지를 요청합니다. Pi 응답은 모터 도착 확인이 아닙니다.' : '현재 서버에서 PTZ를 사용할 수 없습니다.';
 }
-function send(command, fields = {}, callback) {
+function send(command, fields = {}, callback, onError, timeoutMs = 5000) {
   if (socket?.readyState !== WebSocket.OPEN) return false;
   if (pending.size >= 64) { log('VMS', '응답을 기다리는 요청이 너무 많습니다.', true); return false; }
   const id = String(++requestId);
-  pending.set(id, { command, callback, deadline: Date.now() + 5000 });
-  socket.send(JSON.stringify({ version: 1, requestId: id, command, ...(command === 'GET_CAMERA_LIST' ? {} : { cameraId: selectedId }), ...fields })); return true;
+  pending.set(id, { command, callback, onError, cameraId: selectedId, context: contextVersion, deadline: Date.now() + timeoutMs });
+  try { socket.send(JSON.stringify({ version: 1, requestId: id, command, ...(command === 'GET_CAMERA_LIST' ? {} : { cameraId: selectedId }), ...fields })); }
+  catch { pending.delete(id); onError?.('연결이 끊겼습니다.'); return false; }
+  return id;
 }
 function stopMovement() {
   if (!move) return;
@@ -71,7 +83,7 @@ function startMovement(pan, tilt, button) {
   stopMovement(); move = { pan, tilt }; button?.classList.add('active');
   const speed = Number($('speed').value) / 100;
   if (demo) log('DEMO', `PTZ ${pan < 0 ? '왼쪽' : pan > 0 ? '오른쪽' : tilt > 0 ? '위' : '아래'} 이동 · 속도 ${Math.round(speed * 100)}%`);
-  else if (send('PTZ_MOVE', { pan: pan * speed, tilt: tilt * speed })) log('PTZ', '이동 요청 전송');
+  else if (send('PTZ_MOVE', { panVelocity: pan * speed, tiltVelocity: tilt * speed })) log('PTZ', '이동 요청 전송');
   else stopMovement();
 }
 directions.forEach(button => {
@@ -81,13 +93,20 @@ directions.forEach(button => {
   button.addEventListener('keyup', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); stopMovement(); } });
 });
 $('stop').onclick = () => { if (move) stopMovement(); else if (!demo && ptzReady) send('PTZ_STOP'); else log('DEMO', 'PTZ 정지'); };
-$('center').onclick = () => { if (demo) { stopMovement(); position = { pan: 0, tilt: 0 }; log('DEMO', '카메라 중앙 복귀'); } };
+$('center').onclick = () => { stopMovement(); if (demo) { position = { pan: 0, tilt: 0 }; log('DEMO', '카메라 중앙 복귀'); } else if (!$('center').disabled) send('PTZ_CENTER'); };
+// Pi ContinuousMove의 PT1S timeout 안에서 갱신한다. 입력 해제 후 새 MOVE를 쌓지 않는다.
+setInterval(() => {
+  if (!demo && move && ptzReady) {
+    const speed = Number($('speed').value) / 100;
+    if (!send('PTZ_MOVE', { panVelocity: move.pan * speed, tiltVelocity: move.tilt * speed })) stopMovement();
+  }
+}, 200);
 const keyMap = { ArrowUp: [0, 1], ArrowDown: [0, -1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
 let heldKey = null;
 document.addEventListener('keydown', event => {
-  if ($('settings').open || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.target.isContentEditable || event.ctrlKey || event.altKey || event.metaKey) return;
+  if ($('settings').open || event.target.closest('#vmsWorkspace') || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.target.isContentEditable || event.ctrlKey || event.altKey || event.metaKey) return;
   if (keyMap[event.key] && (demo || ptzReady)) { event.preventDefault(); if (!event.repeat) { heldKey = event.key; const [pan, tilt] = keyMap[event.key]; startMovement(pan, tilt, directions.find(b => Number(b.dataset.pan) === pan && Number(b.dataset.tilt) === tilt)); } }
-  if (event.key.toLowerCase() === 'r' && demo && !event.repeat) $('center').click();
+  if (event.key.toLowerCase() === 'r' && (demo || ptzReady) && !event.repeat) $('center').click();
 });
 document.addEventListener('keyup', event => { if (event.key === heldKey) { heldKey = null; stopMovement(); } });
 window.addEventListener('blur', () => { heldKey = null; stopMovement(); });
@@ -97,7 +116,7 @@ $('speed').oninput = () => { $('speedValue').textContent = $('speed').value + '%
 function closeControl() {
   stopMovement(); ptzReady = false;
   if (socket) { const old = socket; socket = null; old.close(); }
-  pending.clear(); updateControls();
+  pending.clear(); ptzResults.clear(); trackingOwners.clear(); contextVersion++; updateControls(); window.VmsWorkspace?.contextChanged();
 }
 function connectControl() {
   closeControl();
@@ -106,28 +125,49 @@ function connectControl() {
   socket = ws;
   const timeout = setTimeout(() => { if (socket === ws && ws.readyState === WebSocket.CONNECTING) { log('VMS', '연결 시간 초과', true); ws.close(); } }, 5000);
   ws.onopen = () => { clearTimeout(timeout); if (socket !== ws) return; log('VMS', '제어 소켓 연결됨'); $('connectionFoot').textContent = 'VMS 연결됨';
-    send('GET_CAMERA_LIST', {}, data => { if (!Array.isArray(data.cameras)) return; cameras = data.cameras; const chosen = cameras.find(c => c.id === selectedId) || cameras[0]; if (chosen) selectCamera(chosen); else { ptzReady = false; updateControls(); } renderCameras(); });
+    window.VmsWorkspace?.contextChanged();
+    send('GET_CAMERA_LIST', {}, data => { if (!Array.isArray(data.cameras)) return; cameras = data.cameras; const chosen = cameras.find(c => c.id === selectedId) || cameras[0]; if (chosen) selectCamera(chosen); else { ptzReady = false; updateControls(); } renderCameras(); if (playing && !reader) requestWebStream(generation); });
     send('GET_CAMERA_STATUS', {}, data => { if (data.camera?.id === selectedId) selectCamera(data.camera); });
   };
   ws.onmessage = event => {
     if (socket !== ws || typeof event.data !== 'string' || event.data.length > 65536) return;
     try {
       const message = JSON.parse(event.data); if (message.version !== 1) return;
+      if (message.type === 'notification' && message.event === 'PTZ_RESULT') {
+        const request = ptzResults.get(message.requestId); if (!request || request.cameraId !== selectedId || request.context !== contextVersion) return;
+        if (message.data?.cameraId !== request.cameraId || message.data?.command !== request.command) return;
+        ptzResults.delete(message.requestId);
+        if (request.command.startsWith('TRACKING_')) window.VmsWorkspace?.trackingResult(message);
+        const phase = message.data?.phase;
+        if (phase==='PI_ACKNOWLEDGED') { if(request.command==='TRACKING_ON')trackingOwners.add(request.cameraId);else trackingOwners.delete(request.cameraId); }
+        log('PTZ PI', `${message.data?.command || request.command} #${message.requestId} ${phase || 'UNKNOWN'}${phase === 'PI_ACKNOWLEDGED' ? ' · ONVIF 응답, 모터 도착 확인 아님' : ''}`, message.ok !== true);
+        if (phase === 'FAILED' && !request.command.startsWith('TRACKING_')) { stopMovement(); ptzReady = false; updateControls(); }
+        return;
+      }
+      if (message.type === 'notification' && ['CAMERA_METADATA', 'CAMERA_EVENT', 'EVENT_RECEIVER_STATUS'].includes(message.event)) { window.VmsWorkspace?.notification(message); return; }
       if (message.type === 'notification' && message.event === 'CAMERA_STATUS') {
         const camera = message.data?.camera; if (!camera || camera.id !== message.cameraId) return;
         const index = cameras.findIndex(c => c.id === camera.id); if (index >= 0) cameras[index] = camera; else cameras.push(camera);
-        if (camera.id === selectedId) { if (camera.capabilities?.ptz !== true) stopMovement(); selectCamera(camera); } renderCameras(); return;
+        if (camera.id === selectedId) { if (camera.capabilities?.ptz !== true) stopMovement(); selectCamera(camera); if (playing && !reader && !videoPending && !videoRetry && camera.capabilities?.webRtcLive === true) requestWebStream(generation); } renderCameras(); return;
       }
       if (message.type !== 'response') return;
       const request = pending.get(message.requestId); if (!request) return; pending.delete(message.requestId);
-      if (message.ok === true) { request.callback?.(message.data || {}); if (request.command.startsWith('PTZ')) log('PTZ', `${request.command} 서버 응답 확인`); }
-      else { log('VMS', `${request.command}: ${message.error?.message || '요청 실패'}`, true); if (request.command === 'PTZ_MOVE') { stopMovement(); ptzReady = false; updateControls(); } }
+      if (request.command !== 'GET_CAMERA_LIST' && (request.cameraId !== selectedId || request.context !== contextVersion)) return;
+      if (message.ok === true) {
+        request.callback?.(message.data || {});
+        if (request.command.startsWith('PTZ') || request.command.startsWith('TRACKING_')) {
+          log('PTZ VMS', `${request.command} #${message.requestId} ${message.data?.phase || 'ACCEPTED'} · Pi 응답 대기`);
+          ptzResults.set(message.requestId, { ...request, deadline: Date.now() + 5000 });
+        }
+      } else { const reason = `${message.error?.code || 'FAILED'}: ${message.error?.message || '요청 실패'}`; log('VMS', `${request.command}: ${reason}`, true); request.onError?.(reason); if (request.command.startsWith('PTZ')) { stopMovement(); ptzReady = false; updateControls(); } }
     } catch { log('VMS', '응답 형식을 확인할 수 없습니다.', true); }
   };
   ws.onerror = () => { if (socket === ws) log('VMS', '제어 소켓에 연결할 수 없습니다.', true); };
-  ws.onclose = () => { clearTimeout(timeout); if (socket !== ws) return; stopMovement(); socket = null; ptzReady = false; pending.clear(); updateControls(); $('connectionFoot').textContent = 'VMS 연결 끊김'; log('VMS', '제어 소켓 연결 종료'); };
+  ws.onclose = () => { clearTimeout(timeout); if (socket !== ws) return; stopMovement(); socket = null; ptzReady = false; pending.clear(); ptzResults.clear(); contextVersion++; updateControls(); window.VmsWorkspace?.contextChanged(); $('connectionFoot').textContent = 'VMS 연결 끊김'; log('VMS', '제어 소켓 연결 종료'); };
 }
 function stopVideo() {
+  window.VmsWorkspace?.clearOverlay();
+  clearTimeout(videoRetry); videoRetry = null; videoPending = false;
   generation++; playing = false; if (reader) { reader.close(); reader = null; }
   const stream = $('video').srcObject; stream?.getTracks().forEach(track => track.stop()); $('video').srcObject = null; $('video').hidden = true; $('demoCanvas').hidden = true;
   lastVideoFrames = -1; lastFrameAt = 0;
@@ -143,15 +183,33 @@ function startVideo() {
     $('videoState').textContent = '데모 화면'; $('streamStatus').textContent = '데모'; $('metricConnection').textContent = '데모'; $('resolution').textContent = '모의 영상'; $('stageLabel').textContent = 'SIMULATED CAMERA FEED'; $('videoDot').style.background = 'var(--accent)'; return;
   }
   empty('영상 연결 중', 'WebRTC 서버에서 영상 트랙을 기다리고 있습니다.'); $('streamBadge').textContent = 'CONNECTING'; $('videoState').textContent = '연결 중'; $('streamStatus').textContent = '연결 중'; $('metricConnection').textContent = '연결 중'; $('stageLabel').textContent = 'LIVE CAMERA FEED';
+  requestWebStream(current);
+}
+function requestWebStream(current) {
+  if (current !== generation || demo || !playing || videoPending || reader) return;
+  if (socket?.readyState !== WebSocket.OPEN) { empty('VMS 연결 대기', 'VMS에 연결하면 서버가 제공하는 WebRTC 주소를 조회합니다.'); return; }
+  videoPending = true;
+  const fail = reason => { if (current !== generation) return; videoPending = false; empty('VMS 영상 연결 실패', reason); $('streamBadge').textContent = 'ERROR'; };
+  if (!send('GET_WEB_STREAM', {}, data => {
+    if (current !== generation || demo || !playing) return;
+    videoPending = false;
+    let url; try { url = new URL(data.uri); } catch { fail('잘못된 VMS 영상 주소'); return; }
+    if (data.cameraId !== selectedId || data.source !== 'vms' || data.protocol !== 'webrtc' || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || typeof data.ready !== 'boolean') { fail('VMS 게이트웨이 응답 형식을 확인하세요.'); return; }
+    if (!data.ready) { empty('VMS 영상 준비 대기', '카메라 등록·VMS 수신 상태를 확인하세요.'); videoRetry = setTimeout(() => requestWebStream(current), 1000); return; }
+    connectWebVideo(url.href, current);
+  }, fail)) fail('VMS 연결 상태를 확인하세요.');
+}
+function connectWebVideo(url, current) {
   try {
-    reader = new window.MediaMTXWebRTCReader({ url: config.whepUrl,
+    reader = new window.MediaMTXWebRTCReader({ url,
       onError: error => { if (current !== generation) return; $('videoState').textContent = '재연결 중'; $('streamStatus').textContent = '재연결 중'; $('streamBadge').textContent = 'RETRYING'; $('streamBadge').className = 'badge'; $('metricConnection').textContent = '재연결 중'; $('videoDot').style.background = 'var(--muted)'; empty('영상에 연결할 수 없습니다', 'WebRTC 주소와 서버 상태를 확인하세요. 자동으로 재연결합니다.'); log('WEBRTC', String(error), true); },
       onTrack: event => { if (current !== generation) return; const stream = event.streams[0] || new MediaStream([event.track]); $('video').srcObject = stream; $('video').hidden = false; $('video').play().catch(() => { empty('재생을 시작해 주세요', '브라우저에서 자동 재생을 허용하지 않았습니다. 영상 시작을 눌러주세요.'); }); log('WEBRTC', '영상 트랙 수신. 프레임 재생 확인 중'); }
     });
   } catch (error) { empty('WebRTC 연결 실패', error.message); log('WEBRTC', error.message, true); }
 }
 setInterval(() => {
-  for (const [id, request] of pending) if (Date.now() > request.deadline) { pending.delete(id); log('VMS', `${request.command} 응답 시간 초과`, true); if (request.command === 'PTZ_MOVE') { stopMovement(); ptzReady = false; updateControls(); } }
+  for (const [id, request] of pending) if (Date.now() > request.deadline) { pending.delete(id); log('VMS', `${request.command} 응답 시간 초과`, true); request.onError?.('응답 시간 초과'); if (request.command.startsWith('PTZ')) { stopMovement(); ptzReady = false; updateControls(); } }
+  for (const [id, request] of ptzResults) if (Date.now() > request.deadline) { ptzResults.delete(id); if (request.context === contextVersion && request.cameraId === selectedId) { log('PTZ PI', `${request.command} #${id} Pi 응답 시간 초과`, true); if (request.command.startsWith('TRACKING_')) window.VmsWorkspace?.trackingFailed('Pi 응답 시간 초과 · 실제 추적 상태 미확인'); else { stopMovement(); ptzReady = false; updateControls(); } } }
   if (!demo && playing && !$('video').hidden) {
     const video = $('video'), frames = video.getVideoPlaybackQuality?.().totalVideoFrames ?? video.webkitDecodedFrameCount ?? 0;
     if (video.readyState >= 2 && video.videoWidth > 0 && !video.paused && frames > lastVideoFrames && lastVideoFrames >= 0) {
@@ -182,10 +240,10 @@ $('settings').addEventListener('cancel', () => { for (const key of Object.keys(c
 $('settingsForm').onsubmit = event => {
   event.preventDefault();
   try {
-    const whep = new URL($('whepUrl').value), ws = new URL($('wsUrl').value);
-    if (!['http:', 'https:'].includes(whep.protocol) || !['ws:', 'wss:'].includes(ws.protocol)) throw new Error('영상은 http(s), 제어는 ws(s) 주소를 입력하세요.');
-    if (whep.username || whep.password || ws.username || ws.password) throw new Error('주소에 계정 정보를 포함하지 마세요.');
-    config = { cameraId: $('cameraId').value.trim(), whepUrl: whep.href, wsUrl: ws.href };
+    const ws = new URL($('wsUrl').value);
+    if (!['ws:', 'wss:'].includes(ws.protocol)) throw new Error('VMS는 ws(s) 주소를 입력하세요.');
+    if (ws.username || ws.password) throw new Error('주소에 계정 정보를 포함하지 마세요.');
+    config = { cameraId: $('cameraId').value.trim(), wsUrl: ws.href };
     try { localStorage.setItem('ptz.connection', JSON.stringify(config)); } catch {}
     $('settings').close(); log('SYSTEM', '연결 설정 저장'); setMode(demo);
   } catch (error) { $('settingsError').textContent = error.message; }
@@ -216,3 +274,10 @@ function draw(now) {
 requestAnimationFrame(draw);
 window.addEventListener('pagehide', () => { closeControl(); stopVideo(); });
 setMode(true);
+// 화면 모듈은 같은 소켓을 재사용한다. 계정과 Gemini 키는 VMS 설정에만 보관한다.
+window.VmsControl = {
+  send,
+  state: () => ({ demo, connected: socket?.readyState === WebSocket.OPEN, cameraId: selectedId, camera: cameras.find(c => c.id === selectedId), context: contextVersion, manualMoving: !!move, stopPending: [...pending.values(), ...ptzResults.values()].some(r => r.cameraId === selectedId && r.command === 'PTZ_STOP') }),
+  refresh: () => send('GET_CAMERA_LIST', {}, data => { if (!Array.isArray(data.cameras)) return; cameras = data.cameras; const chosen = cameras.find(c => c.id === selectedId) || cameras[0]; if (chosen) selectCamera(chosen); renderCameras(); window.VmsWorkspace?.contextChanged(); }),
+  log,
+};
