@@ -19,7 +19,7 @@ test('theme selection persists and demo interaction stops on release and blur', 
 test('unsupported VMS keeps PTZ disabled and WebRTC failure never shows LIVE', async ({ page }) => {
   await page.routeWebSocket('ws://127.0.0.1:5000/ws', ws => {
     ws.onMessage(raw => { const req = JSON.parse(raw); const camera = { id: 'CAM01', name: 'Test camera', status: 'ONLINE', capabilities: { ptz: false } };
-      ws.send(JSON.stringify({ version: 1, type: 'response', requestId: req.requestId, ok: true, data: req.command === 'GET_WEB_STREAM' ? { cameraId: 'CAM01', ready: true, source: 'vms', protocol: 'webrtc', uri: 'http://127.0.0.1:8889/CAM01/whep' } : req.command === 'GET_CAMERA_LIST' ? { cameras: [camera] } : { camera } })); });
+      ws.send(JSON.stringify({ version: 1, type: 'response', requestId: req.requestId, ok: true, data: req.command === 'GET_WEB_STREAM' ? { cameraId: 'CAM01', ready: true, source: 'vms', protocol: 'webrtc', signaling: 'websocket', gateway: 'native' } : req.command === 'GET_CAMERA_LIST' ? { cameras: [camera] } : { camera } })); });
   });
   await page.route('http://127.0.0.1:8889/**', route => route.abort()); await page.goto('/'); await page.locator('#demoToggle').uncheck();
   await expect(page.locator('#cameraName')).toHaveText('Test camera');

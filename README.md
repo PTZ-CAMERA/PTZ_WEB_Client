@@ -9,14 +9,13 @@ Qt Mini VMS 화면의 카메라 목록 / 영상 / PTZ 배치를 참고한 브라
 flowchart LR
     Static["Node 정적 파일 서버 :5173"] -->|"HTML / CSS / JS"| Web["PTZ Studio · Browser"]
     Pi["Raspberry Pi Camera"] -->|RTSP :8554| VMS["Mini VMS Server"]
-    VMS -->|VMS RTSP :8555| Media["PC MediaMTX Gateway"]
-    Media -->|"WebRTC 영상"| Web
-    Web <-->|"WebSocket :5000 / 상태·영상 주소 조회"| VMS
+    VMS -->|"내장 WebRTC / ICE UDP"| Web
+    Web <-->|"WebSocket :5000 / 상태·SDP 신호 교환"| VMS
     Web -->|"PTZ · 등록 · 녹화 · 탐지/채팅 검색"| VMS
     VMS -->|"ONVIF Digest :8080"| Pi
 ```
 
-Node 서버는 정적 파일을 제공합니다. 영상은 VMS의 RTSP를 읽는 PC MediaMTX를 거쳐 WebRTC로 전달됩니다. Web은 Pi에 직접 연결하지 않습니다.
+Node 서버는 정적 파일을 제공합니다. 영상은 VMS가 받은 H.264를 내장 libdatachannel로 WebRTC 전송합니다. Web은 Pi에 직접 연결하지 않습니다.
 
 ## 코드 구조
 
@@ -25,7 +24,7 @@ flowchart TD
     UI["index.html · 카메라/영상/PTZ/설정"] --> App["app.js · 화면·연결 상태"]
     CSS["style.css · 테마·반응형"] --> UI
     App --> Demo["Canvas 데모"]
-    App --> Reader["vendor/reader.js · MediaMTX reader"]
+    App --> Reader["native-webrtc.js · RTCPeerConnection"]
     Reader --> Video["video · frame 수신 확인"]
     App --> WS["WebSocket · VMS 조회·상태 알림"]
     App --> Storage["localStorage · 설정·테마"]
@@ -41,7 +40,7 @@ PTZ_WEB_Client/
 ├── server.mjs             # Node 정적 파일 서버
 ├── package.json           # 실행·테스트 명령
 ├── package-lock.json      # dependency 잠금
-├── vendor/                # WebRTC reader 및 라이선스
+├── native-webrtc.js        # VMS SDP 교환 / RTCPeerConnection
 ├── tests/                 # Playwright UI / mock VMS
 └── playwright.config.js   # 테스트 설정
 ```
@@ -61,18 +60,11 @@ npm run dev
 
 ## 실제 영상
 
-톱니바퀴에서 카메라 ID와 VMS WebSocket 주소를 설정하고 데모 모드를 끕니다. GET_WEB_STREAM으로 게이트웨이 주소를 조회합니다.
+VMS WebSocket 주소를 설정하고 데모 모드를 끕니다. GET_WEB_STREAM으로 준비 상태를 조회한 후 WEBRTC_START/WEBRTC_ANSWER로 SDP를 교환합니다. native-webrtc.js의 RTCPeerConnection이 VMS와 직접 연결합니다.
 
-- 로컬 CAM01 게이트웨이 주소: `http://127.0.0.1:8889/CAM01/whep` (VMS 설정에서 제공)
-- 기본 VMS 주소: `ws://127.0.0.1:5000/ws`
+기본 신호 주소는 ws://127.0.0.1:5000/ws, 미디어는 VMS ICE UDP 50000~50100입니다. PC MediaMTX 프로세스·WHEP·HTTP 8889·ICE 8189는 사용하지 않습니다. 이전 저장 설정의 Pi whepUrl도 사용하지 않습니다.
 
-이전 저장 설정의 Pi whepUrl은 사용하지 않습니다. 설정 화면에서도 직접 WHEP 입력을 제거했습니다.
-
-MediaMTX 공식 WebRTC reader를 로컬에 포함해 SDP/ICE, 세션 해제 및 재접속을 처리합니다. `video` 요소의 프레임 증가를 확인한 뒤에만 LIVE로 표시합니다. 데모에는 실제 해상도·프레임 통계 값을 만들지 않습니다. 영상 정지, 모드 전환 및 페이지 종료 시 reader/트랙을 해제합니다.
-
-VMS 설정의 webrtc_gateway_url과 PC MediaMTX 실행이 필요합니다. [게이트웨이 실행·새 영상 경로](../PTZ_VMS_Server/docs/LIVE_ROUTING.md). 같은 PC 기본 포트는 WHEP HTTP 8889 / ICE UDP·TCP 8189입니다. HTTPS 웹페이지에서는 HTTPS/WSS 주소를 사용합니다.
-
-공식 참고: https://mediamtx.org/docs/read/web-browsers
+실제 영상 프레임 증가를 확인한 뒤 LIVE로 표시합니다. 정지·페이지 종료·세션 단절 때 peer를 해제하며 실패하면 다시 연결합니다. [VMS 빌드·포트·검증](../PTZ_VMS_Server/docs/LIVE_ROUTING.md)
 
 ## 실제 PTZ 연결 계약
 
@@ -101,7 +93,7 @@ VMS가 요구하는 필드는 `panVelocity/tiltVelocity`입니다. 값은 -1..1�
 
 버튼 release/cancel, 키 해제, 창 focus 이탈, 탭 숨김, 카메라/모드 전환 시 정지를 요청합니다. 소켓이 이미 끊긴 경우 정지 명령 전달은 보장되지 않습니다. 현재 VMS에는 세션 종료 및 이동 lease 만료 시 Stop 처리가 구현되어 있습니다. 웹의 응답 시간 초과 또는 이동 오류 시 제어를 비활성화합니다. 브라우저는 Qt legacy의 raw TCP `PTZ:LEFT` 프로토콜에 직접 연결하지 않습니다.
 
-영상 연결과 PTZ 연결은 독립적입니다. 각 카메라의 WHEP 주소는 설정에서 지정해야 합니다. 카메라 목록에서 다른 카메라를 선택하면 기존 영상을 정지하여 잘못된 카메라 영상이 남지 않게 합니다.
+영상 연결과 PTZ 연결은 독립적입니다. 카메라 목록에서 다른 카메라를 선택하면 기존 WebRTC peer를 정지하여 이전 카메라 영상이 남지 않게 합니다.
 
 ## 검증
 
@@ -120,7 +112,7 @@ Playwright로 테마·데모·모바일 표시, 최신 PTZ 명령·200ms 갱신�
 - **채팅 검색**: CHAT_SEARCH, timezone=Asia/Seoul, 45초 timeout, clarify/unsupported/error/다음 페이지/결과 선택. Gemini 키는 Web에 저장하지 않습니다.
 - **카메라 등록**: DISCOVER_CAMERAS → 장치 선택 → REGISTER_CAMERA. 계정은 VMS 서버 설정을 사용합니다.
 
-**녹화 영상 재생은 Qt 전용입니다.** Web의 녹화 제어·목록 조회는 유지하고 검색 결과의 재생 버튼·offsetMs 표시를 제거했습니다. 라이브 영상은 VMS → PC MediaMTX → WebRTC로 연결합니다.
+**녹화 영상 재생은 Qt 전용입니다.** Web의 녹화 제어·목록 조회는 유지하고 검색 결과의 재생 버튼·offsetMs 표시를 제거했습니다. 라이브 영상은 VMS → 내장 WebRTC로 연결합니다.
 
 [API·검증 범위](docs/VMS_INTEGRATION.md)
 
@@ -134,6 +126,16 @@ Playwright로 테마·데모·모바일 표시, 최신 PTZ 명령·200ms 갱신�
 | [Qt_Client](https://github.com/PTZ-CAMERA/Qt_Client) | VMS를 사용하는 Qt 데스크톱 클라이언트 |
 | [PTZ_WEB_Client](https://github.com/PTZ-CAMERA/PTZ_WEB_Client) | WebRTC 영상·PTZ용 브라우저 화면 |
 
-## 외부 코드
+## WebRTC 구현
 
-`vendor/reader.js`: bluenviron/mediamtx 공식 저장소에서 2026-10-07에 가져온 WebRTC reader. 라이선스는 `vendor/MEDIAMTX-LICENSE`에 보존했습니다. 외부 CDN 없이 포함합니다. 화면의 웹 폰트는 Google Fonts를 사용하며 네트워크가 없으면 시스템 폰트로 표시합니다.
+브라우저 표준 RTCPeerConnection과 기존 WebSocket을 사용합니다. 이전 MediaMTX reader는 제거했습니다. 화면의 Google Fonts는 네트워크가 없으면 시스템 폰트로 표시합니다.
+
+## 자동 녹화와 검증 범위
+
+탐지 자동 녹화 정책은 VMS가 담당하며 설정 또는 Qt에서 선택합니다. Web에는 자동 모드 변경 체크박스를 추가하지 않았습니다. 기존 수동 녹화 시작·정지와 완료 목록·탐지 검색은 제공합니다. 녹화 재생은 Qt 전용입니다.
+
+Playwright UI 테스트 11개 통과. 별도 합성 시험으로 실제 VMS/FFmpeg/libdatachannel/Chromium에서 1280×720 디코딩과 정지·재연결을 확인했습니다. 실제 Pi 영상의 새 WebRTC 경로, 다중 카메라 부하, 외부 NAT·장시간 시험은 아직 검증하지 않았습니다.
+
+현재 VMS Tracking은 기존 ONVIF 계약이고 최신 Pi 소스는 독립 /camera/control JSON 추적 스위치를 추가했습니다. 최신 Pi 배포에 맞는 VMS adapter와 실제 OFF 동작 확인은 남은 작업입니다.
+
+관련 Pi 저장소: [PTZ_CAMERA](https://github.com/PTZ-CAMERA/PTZ_CAMERA).

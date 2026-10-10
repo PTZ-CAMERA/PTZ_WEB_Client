@@ -10,7 +10,9 @@ async function fixture(page, handler = () => {}) {
       const reply = (data, ok = true) => ws.send(JSON.stringify({ version: 1, type: 'response', requestId: req.requestId, ok, ...(ok ? { data } : { error: { code: 'TEST_ERROR', message: data } }) }));
       if (req.command === 'GET_CAMERA_LIST') reply({ cameras: [camera('CAM01'), camera('CAM02')] });
       else if (req.command === 'GET_CAMERA_STATUS') reply({ camera: camera(req.cameraId) });
-      else if (req.command === 'GET_WEB_STREAM') reply({ cameraId: req.cameraId, source: 'vms', protocol: 'webrtc', ready: true, uri: `http://127.0.0.1:8889/${req.cameraId}/whep` });
+      else if (req.command === 'GET_WEB_STREAM') reply({ cameraId: req.cameraId, source: 'vms', protocol: 'webrtc', ready: true, signaling: 'websocket', gateway: 'native' });
+      else if (req.command === 'WEBRTC_START') reply({ cameraId: req.cameraId, clientId: 'mock', type: 'offer', sdp: 'invalid-fixture-sdp' });
+      else if (req.command === 'WEBRTC_STOP') reply({ cameraId: req.cameraId });
       else if (req.command.startsWith('PTZ')) {
         reply({ cameraId: req.cameraId, command: req.command, phase: 'ACCEPTED', motorArrivalConfirmed: false });
         ws.send(JSON.stringify({ version: 1, type: 'notification', event: 'PTZ_RESULT', requestId: req.requestId, ok: true, data: { cameraId: req.cameraId, command: req.command, phase: 'PI_ACKNOWLEDGED', motorArrivalConfirmed: false } }));
@@ -95,13 +97,14 @@ test('registration uses server credentials and recording UI uses existing APIs',
   await page.locator('#tabRecordings').click(); await page.locator('#recordingSearch').click(); await expect(page.locator('#recordingRows')).toContainText('C:/recordings/test.mkv'); await page.locator('#recordStart').click(); await expect.poll(() => commands.some(r => r.command === 'START_RECORDING')).toBe(true);
   await page.locator('#tabEvents').click(); await page.locator('#eventSearch').focus(); await page.keyboard.press('ArrowRight'); expect(commands.filter(r => r.command === 'PTZ_MOVE')).toHaveLength(0);
 });
-test('Web live uses the VMS gateway URI and ignores a saved direct Pi WHEP address', async ({ page }) => {
+test('Web live uses VMS native signaling and ignores saved external gateway addresses', async ({ page }) => {
   const requests = [];
   await page.addInitScript(() => localStorage.setItem('ptz.connection', JSON.stringify({ cameraId: 'CAM01', wsUrl: 'ws://127.0.0.1:5000/ws', whepUrl: 'http://192.168.0.92:8889/cam/whep' })));
   page.on('request', req => requests.push(req.url()));
   const { commands } = await fixture(page);
   await expect.poll(() => commands.some(req => req.command === 'GET_WEB_STREAM' && req.cameraId === 'CAM01')).toBe(true);
-  await expect.poll(() => requests.some(url => url.startsWith('http://127.0.0.1:8889/CAM01/whep'))).toBe(true);
+  await expect.poll(() => commands.some(req => req.command === 'WEBRTC_START' && req.cameraId === 'CAM01')).toBe(true);
+  expect(requests.some(url => url.includes('/whep') || url.includes(':8889'))).toBe(false);
   expect(requests.some(url => url.includes('192.168.0.92'))).toBe(false);
   await page.locator('#settingsOpen').click(); await expect(page.locator('#whepUrl')).toHaveCount(0);
 });

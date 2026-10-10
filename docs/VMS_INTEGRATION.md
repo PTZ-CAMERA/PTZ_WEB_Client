@@ -1,12 +1,12 @@
 # VMS Web 연동 (2026-10-10)
 
-기존 vanilla JavaScript·MediaMTX reader와 하나의 WebSocket을 재사용한다. 새 런타임 dependency와 VMS WebRTC dependency는 추가하지 않았다.
+기존 vanilla JavaScript와 WebSocket을 재사용한다. 브라우저 RTCPeerConnection과 VMS 내장 libdatachannel을 연결한다. PC MediaMTX reader와 게이트웨이는 제거했다.
 
 ## 주소와 기본 실행
 
 - Web: `npm run dev` → `http://localhost:5173` (첫 화면은 데모).
 - VMS: `ws://127.0.0.1:5000/ws`. 설정에서 주소 변경 후 데모를 끈다.
-- 영상: GET_WEB_STREAM에서 VMS가 제공한 PC MediaMTX URL. Pi 직접 주소·저장된 whepUrl은 사용하지 않는다.
+- 영상: GET_WEB_STREAM 후 WEBRTC_START/WEBRTC_ANSWER로 VMS와 직접 연결. Pi 직접 주소·저장된 whepUrl은 사용하지 않는다.
 - 브라우저 다른 PC 사용 시 localhost를 VMS PC 주소로 변경하고 서버 bind/네트워크 접근을 별도로 구성한다.
 
 ## 요청 계약
@@ -40,10 +40,10 @@
 
 ## 남은 서버 기능
 
-사용자 요청으로 Web 녹화 재생·위치 조회를 제외했다. 녹화 시작·정지·목록은 유지한다. Web 영상은 VMS relay → PC MediaMTX → WebRTC로 구현했다. [실행 방법](../../PTZ_VMS_Server/docs/LIVE_ROUTING.md).
+사용자 요청으로 Web 녹화 재생·위치 조회를 제외했다. 녹화 시작·정지·목록은 유지한다. Web 영상은 VMS 내장 libdatachannel → WebRTC로 구현했다. [실행 방법](../../PTZ_VMS_Server/docs/LIVE_ROUTING.md).
 
 ## 검증
 
-Playwright 10개: 기존 화면·PTZ·메타데이터·검색·채팅·등록·녹화, 재생 UI 제거, VMS 영상 주소·이전 Pi 주소 무시를 검사한다. 별도 합성 시험에서는 실제 VMS·PC MediaMTX·Chromium으로 1280×720 WebRTC 프레임을 확인했다. 실물 시험은 사용자 담당이다.
+Playwright 10개: 기존 화면·PTZ·메타데이터·검색·채팅·등록·녹화, 재생 UI 제거, VMS 영상 주소·이전 Pi 주소 무시를 검사한다. 별도 합성 시험에서는 실제 VMS 내부 WebRTC·Chromium으로 1280×720 WebRTC 프레임을 확인했다. 실물 시험은 사용자 담당이다.
 
 실행 중인 VMS에도 브라우저를 연결해 CAM01 ONLINE/Events SUBSCRIBED/capabilities를 확인했다. GET_DETECTIONS, GET_EVENTS, GET_RECORDINGS 요청이 정상 응답했고 조회 범위에서는 모두 0개였다. JavaScript 오류는 없었다. 이 확인에서는 WHEP 연결을 차단하고 PTZ·녹화·Gemini 요청을 실행하지 않았다. 따라서 실물 영상 재생이나 실제 탐지 결과의 존재를 검증한 것은 아니다.

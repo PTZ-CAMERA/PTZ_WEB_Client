@@ -133,6 +133,10 @@ function connectControl() {
     if (socket !== ws || typeof event.data !== 'string' || event.data.length > 65536) return;
     try {
       const message = JSON.parse(event.data); if (message.version !== 1) return;
+      if (message.type === 'notification' && message.event === 'WEBRTC_STATE') {
+        if (message.cameraId === selectedId && reader?.clientId === message.data?.clientId && message.data.state === 'CLOSED') reader.fail('VMS 영상 세션이 종료되었습니다.');
+        return;
+      }
       if (message.type === 'notification' && message.event === 'PTZ_RESULT') {
         const request = ptzResults.get(message.requestId); if (!request || request.cameraId !== selectedId || request.context !== contextVersion) return;
         if (message.data?.cameraId !== request.cameraId || message.data?.command !== request.command) return;
@@ -193,16 +197,15 @@ function requestWebStream(current) {
   if (!send('GET_WEB_STREAM', {}, data => {
     if (current !== generation || demo || !playing) return;
     videoPending = false;
-    let url; try { url = new URL(data.uri); } catch { fail('잘못된 VMS 영상 주소'); return; }
-    if (data.cameraId !== selectedId || data.source !== 'vms' || data.protocol !== 'webrtc' || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || typeof data.ready !== 'boolean') { fail('VMS 게이트웨이 응답 형식을 확인하세요.'); return; }
+    if (data.cameraId !== selectedId || data.source !== 'vms' || data.protocol !== 'webrtc' || data.signaling !== 'websocket' || typeof data.ready !== 'boolean') { fail('VMS WebRTC 응답 형식을 확인하세요.'); return; }
     if (!data.ready) { empty('VMS 영상 준비 대기', '카메라 등록·VMS 수신 상태를 확인하세요.'); videoRetry = setTimeout(() => requestWebStream(current), 1000); return; }
-    connectWebVideo(url.href, current);
+    connectWebVideo(current);
   }, fail)) fail('VMS 연결 상태를 확인하세요.');
 }
-function connectWebVideo(url, current) {
+function connectWebVideo(current) {
   try {
-    reader = new window.MediaMTXWebRTCReader({ url,
-      onError: error => { if (current !== generation) return; $('videoState').textContent = '재연결 중'; $('streamStatus').textContent = '재연결 중'; $('streamBadge').textContent = 'RETRYING'; $('streamBadge').className = 'badge'; $('metricConnection').textContent = '재연결 중'; $('videoDot').style.background = 'var(--muted)'; empty('영상에 연결할 수 없습니다', 'WebRTC 주소와 서버 상태를 확인하세요. 자동으로 재연결합니다.'); log('WEBRTC', String(error), true); },
+    reader = new window.NativeWebRtcReceiver({ send,
+      onError: error => { if (current !== generation) return; reader = null; $('videoState').textContent = '재연결 중'; $('streamStatus').textContent = '재연결 중'; $('streamBadge').textContent = 'RETRYING'; $('streamBadge').className = 'badge'; $('metricConnection').textContent = '재연결 중'; $('videoDot').style.background = 'var(--muted)'; empty('영상에 연결할 수 없습니다', 'VMS 연결을 확인하세요. 자동 재연결합니다.'); log('WEBRTC', String(error), true); videoRetry = setTimeout(() => requestWebStream(current), 1500); },
       onTrack: event => { if (current !== generation) return; const stream = event.streams[0] || new MediaStream([event.track]); $('video').srcObject = stream; $('video').hidden = false; $('video').play().catch(() => { empty('재생을 시작해 주세요', '브라우저에서 자동 재생을 허용하지 않았습니다. 영상 시작을 눌러주세요.'); }); log('WEBRTC', '영상 트랙 수신. 프레임 재생 확인 중'); }
     });
   } catch (error) { empty('WebRTC 연결 실패', error.message); log('WEBRTC', error.message, true); }
@@ -213,6 +216,7 @@ setInterval(() => {
   if (!demo && playing && !$('video').hidden) {
     const video = $('video'), frames = video.getVideoPlaybackQuality?.().totalVideoFrames ?? video.webkitDecodedFrameCount ?? 0;
     if (video.readyState >= 2 && video.videoWidth > 0 && !video.paused && frames > lastVideoFrames && lastVideoFrames >= 0) {
+      reader?.confirmFrames();
       lastFrameAt = Date.now(); $('emptyState').hidden = true; $('streamBadge').textContent = 'LIVE'; $('streamBadge').className = 'badge live';
       $('videoState').textContent = '영상 수신 중'; $('streamStatus').textContent = '수신 중'; $('metricConnection').textContent = '수신 중'; $('videoDot').style.background = 'var(--accent)';
       $('metricSize').textContent = `${video.videoWidth} × ${video.videoHeight}`; $('metricFrames').textContent = frames.toLocaleString(); $('resolution').textContent = `${video.videoWidth} × ${video.videoHeight}`;
