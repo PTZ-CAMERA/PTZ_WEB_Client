@@ -1,5 +1,7 @@
 'use strict';
 (() => {
+  // 검색·녹화·metadata UI의 상태를 소유한다. 영상 전송은 native-webrtc.js,
+  // 공통 소켓/카메라 선택은 app.js의 책임이며 epoch로 이전 응답을 걸러낸다.
   const el = id => document.getElementById(id), api = window.VmsControl;
   let signature = '', epoch = 0, metadata = {}, topicTimes = new Map(), bbox = null, bboxAt = 0;
   let eventCursor = null, chatCursor = null, eventQuery = null;

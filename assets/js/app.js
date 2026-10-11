@@ -1,4 +1,7 @@
 'use strict';
+// 연결·카메라 선택·입력·라이브 화면을 조립한다. DB/ONVIF는 VMS가 담당한다.
+// contextVersion은 카메라/연결 세대, generation은 영상 세대다. 늦은 응답은
+// 현재 화면과 세대가 일치할 때만 적용해 이전 카메라 영상·명령이 섞이지 않게 한다.
 const $ = (id) => document.getElementById(id);
 const directions = [...document.querySelectorAll('.direction')];
 let demo = true, playing = true, reader = null, socket = null, generation = 0;

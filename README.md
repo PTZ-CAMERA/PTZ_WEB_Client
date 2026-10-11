@@ -21,26 +21,27 @@ Node 서버는 정적 파일을 제공합니다. 영상은 VMS가 받은 H.264�
 
 ```mermaid
 flowchart TD
-    UI["index.html · 카메라/영상/PTZ/설정"] --> App["app.js · 화면·연결 상태"]
-    CSS["style.css · 테마·반응형"] --> UI
+    UI["index.html · 카메라/영상/PTZ/설정"] --> App["assets/js/app.js · 화면·연결 상태"]
+    CSS["assets/css/style.css · 테마·반응형"] --> UI
     App --> Demo["Canvas 데모"]
-    App --> Reader["native-webrtc.js · RTCPeerConnection"]
+    App --> Reader["assets/js/native-webrtc.js · RTCPeerConnection"]
     Reader --> Video["video · frame 수신 확인"]
     App --> WS["WebSocket · VMS 조회·상태 알림"]
     App --> Storage["localStorage · 설정·테마"]
-    App --> Workspace["vms-workspace.js · metadata / 검색 / 녹화 / 등록"]
+    App --> Workspace["assets/js/vms-workspace.js · metadata / 검색 / 녹화 / 등록"]
 ```
 
 ```text
 PTZ_WEB_Client/
 ├── index.html             # 화면
-├── style.css              # 테마·반응형
-├── app.js                 # 데모·WebRTC·VMS·PTZ 입력
-├── vms-workspace.js       # 실시간 bbox·이벤트·녹화·채팅·ONVIF 등록
+├── assets/
+│   ├── js/app.js           # 데모·WebRTC·VMS·PTZ 입력
+│   ├── js/native-webrtc.js # VMS SDP / RTCPeerConnection
+│   ├── js/vms-workspace.js # metadata·검색·녹화·등록 UI
+│   └── css/style.css       # 테마·반응형
 ├── server.mjs             # Node 정적 파일 서버
 ├── package.json           # 실행·테스트 명령
 ├── package-lock.json      # dependency 잠금
-├── native-webrtc.js        # VMS SDP 교환 / RTCPeerConnection
 ├── tests/                 # Playwright UI / mock VMS
 └── playwright.config.js   # 테스트 설정
 ```
@@ -139,3 +140,7 @@ Playwright UI 테스트 11개 통과. 별도 합성 시험으로 실제 VMS/FFmp
 현재 VMS Tracking은 기존 ONVIF 계약이고 최신 Pi 소스는 독립 /camera/control JSON 추적 스위치를 추가했습니다. 최신 Pi 배포에 맞는 VMS adapter와 실제 OFF 동작 확인은 남은 작업입니다.
 
 관련 Pi 저장소: [PTZ_CAMERA](https://github.com/PTZ-CAMERA/PTZ_CAMERA).
+
+## 코드 구조 정리
+
+실행·API·기능은 유지하고 브라우저 JS/CSS만 assets/로 묶었습니다. 이전 루트 asset URL도 server.mjs가 호환 매핑합니다. 모듈 책임·로드 순서·세대별 응답 처리는 [CODE_GUIDE](docs/CODE_GUIDE.md)를 참고하세요.

@@ -1,4 +1,6 @@
 // VMS /ws로 SDP를 교환한다. 외부 WHEP 요청은 없다.
+// 연결 성공과 영상 재생 성공은 다르다. app.js가 실제 프레임 증가를 확인해야
+// confirmFrames()로 대기 타이머를 해제하며, close()는 VMS peer도 정리한다.
 class NativeWebRtcReceiver {
   constructor({ send, onTrack, onError }) {
     this.send = send; this.onError = onError; this.closed = false;
