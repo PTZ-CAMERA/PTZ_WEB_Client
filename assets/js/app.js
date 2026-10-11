@@ -81,6 +81,8 @@ function stopMovement() {
   move = null; directions.forEach(button => button.classList.remove('active'));
   if (demo) log('DEMO', 'PTZ 이동 정지'); else if (send('PTZ_STOP')) log('PTZ', '정지 요청 전송');
 }
+// ptzReady는 연결·capability 검사 결과이며 제어권 획득을 보장하지 않는다.
+// 다른 WS 세션이 카메라를 소유하면 VMS에서 PTZ_BUSY로 거절할 수 있다.
 function startMovement(pan, tilt, button) {
   if ((!demo && !ptzReady) || $('settings').open) return;
   stopMovement(); move = { pan, tilt }; button?.classList.add('active');

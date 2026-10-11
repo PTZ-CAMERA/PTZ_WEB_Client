@@ -1,5 +1,7 @@
 # PTZ Studio Web Client
 
+[문서 안내](docs/README.md) · [최신 전체 구조도](docs/SYSTEM_ARCHITECTURE.md)
+
 Qt Mini VMS 화면의 카메라 목록 / 영상 / PTZ 배치를 참고한 브라우저 클라이언트입니다.
 현재 VMS 계약에 맞춰 ONVIF 카메라 등록, PTZ, 실시간 메타데이터, 탐지/상태 이력 검색, 녹화 제어·검색, 자연어 검색 화면을 제공합니다.
 
@@ -65,7 +67,7 @@ VMS WebSocket 주소를 설정하고 데모 모드를 끕니다. GET_WEB_STREAM�
 
 기본 신호 주소는 ws://127.0.0.1:5000/ws, 미디어는 VMS ICE UDP 50000~50100입니다. PC MediaMTX 프로세스·WHEP·HTTP 8889·ICE 8189는 사용하지 않습니다. 이전 저장 설정의 Pi whepUrl도 사용하지 않습니다.
 
-실제 영상 프레임 증가를 확인한 뒤 LIVE로 표시합니다. 정지·페이지 종료·세션 단절 때 peer를 해제하며 실패하면 다시 연결합니다. [VMS 빌드·포트·검증](../PTZ_VMS_Server/docs/LIVE_ROUTING.md)
+실제 영상 프레임 증가를 확인한 뒤 LIVE로 표시합니다. 정지·페이지 종료·세션 단절 때 peer를 해제하며 실패하면 다시 연결합니다. [VMS 빌드·포트·검증](https://github.com/PTZ-CAMERA/PTZ_VMS_Server/blob/main/docs/LIVE_ROUTING.md)
 
 ## 실제 PTZ 연결 계약
 
@@ -90,7 +92,7 @@ VMS가 요구하는 필드는 `panVelocity/tiltVelocity`입니다. 값은 -1..1�
 - PI_ACKNOWLEDGED는 ONVIF 응답이며 모터 도착 완료가 아닙니다. FAILED/SUPERSEDED도 처리해야 합니다.
 - 서버의 ptzCenter capability에 따라 중앙 버튼/R 키를 PTZ_CENTER로 연결합니다.
 
-실제 장비의 Web PTZ 구동은 검증하지 않았습니다. VMS는 PT1S timeout, 600ms 갱신 lease 및 연결 단절 시 Stop 시도를 구현했습니다.
+VMS는 PT1S timeout, 600ms 갱신 lease 및 연결 단절 시 Stop 시도를 구현했습니다.
 
 버튼 release/cancel, 키 해제, 창 focus 이탈, 탭 숨김, 카메라/모드 전환 시 정지를 요청합니다. 소켓이 이미 끊긴 경우 정지 명령 전달은 보장되지 않습니다. 현재 VMS에는 세션 종료 및 이동 lease 만료 시 Stop 처리가 구현되어 있습니다. 웹의 응답 시간 초과 또는 이동 오류 시 제어를 비활성화합니다. 브라우저는 Qt legacy의 raw TCP `PTZ:LEFT` 프로토콜에 직접 연결하지 않습니다.
 
@@ -131,13 +133,11 @@ Playwright로 테마·데모·모바일 표시, 최신 PTZ 명령·200ms 갱신�
 
 브라우저 표준 RTCPeerConnection과 기존 WebSocket을 사용합니다. 이전 MediaMTX reader는 제거했습니다. 화면의 Google Fonts는 네트워크가 없으면 시스템 폰트로 표시합니다.
 
-## 자동 녹화와 검증 범위
+## 자동 녹화
 
 탐지 자동 녹화 정책은 VMS가 담당하며 설정 또는 Qt에서 선택합니다. Web에는 자동 모드 변경 체크박스를 추가하지 않았습니다. 기존 수동 녹화 시작·정지와 완료 목록·탐지 검색은 제공합니다. 녹화 재생은 Qt 전용입니다.
 
-Playwright UI 테스트 11개 통과. 별도 합성 시험으로 실제 VMS/FFmpeg/libdatachannel/Chromium에서 1280×720 디코딩과 정지·재연결을 확인했습니다. 실제 Pi 영상의 새 WebRTC 경로, 다중 카메라 부하, 외부 NAT·장시간 시험은 아직 검증하지 않았습니다.
-
-현재 VMS Tracking은 기존 ONVIF 계약이고 최신 Pi 소스는 독립 /camera/control JSON 추적 스위치를 추가했습니다. 최신 Pi 배포에 맞는 VMS adapter와 실제 OFF 동작 확인은 남은 작업입니다.
+Playwright UI 테스트 11개 통과. 별도 합성 시험으로 실제 VMS/FFmpeg/libdatachannel/Chromium에서 1280×720 디코딩과 정지·재연결을 확인했습니다. 이후 실제 Pi 영상의 WebRTC 프레임 수신도 확인했습니다.
 
 관련 Pi 저장소: [PTZ_CAMERA](https://github.com/PTZ-CAMERA/PTZ_CAMERA).
 
